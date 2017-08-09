@@ -74,6 +74,108 @@ final class DifferentialBugzillaBugIDField
       ->setError($this->error);
   }
 
+  public function validateApplicationTransactions(
+    PhabricatorApplicationTransactionEditor $editor,
+    $type, array $xactions) {
+
+    $this->error = null;
+
+    $errors = parent::validateApplicationTransactions($editor, $type, $xactions);
+
+    foreach ($xactions as $xaction) {
+      $bug_id = $xaction->getNewValue();
+
+      // Get the transactor's ExternalAccount->accountID using the author's phid
+      $xaction_author_phid = $xaction->getAuthorPHID();
+      $users = id(new PhabricatorExternalAccountQuery())
+        ->setViewer(PhabricatorUser::getOmnipotentUser())
+        ->withAccountTypes(PhabricatorBMOAuthProvider::ADAPTER_TYPE)
+        ->withPHIDs($xaction_author_phid)
+        ->execute();
+
+      // In theory this should be impossible, unless someone is removed from
+      // the system manually (somehow)
+      if(!count($users)) {
+        $errors[] = new PhabricatorApplicationTransactionValidationError(
+          $type,
+          pht(''),
+          pht('This transaction\'s user was not found')
+        );
+        return $errors;
+      }
+      $user_id = $users[0]->getAccountID();
+
+      // Required
+      if(!strlen($bug_id)) {
+        $errors[] = new PhabricatorApplicationTransactionValidationError(
+          $type,
+          pht('Required'),
+          pht('Bugzilla Bug ID is required')
+        );
+      }
+      else if (!ctype_digit($bug_id)) { // Isn't a number we can work with
+        $errors[] = new PhabricatorApplicationTransactionValidationError(
+          $type,
+          pht('Required'),
+          pht('Bugzilla Bug ID must be a number')
+        );
+      }
+      else { // Make a request to BMO to ensure the bug exists and user can see it
+        $future_uri = id(new PhutilURI(PhabricatorEnv::getEnvConfig('bugzilla.url')))
+          ->setPath('/phabbugz/permissions/'.$bug_id.'/'.$user_id);
+
+        // http://bugzilla.readthedocs.io/en/latest/api/core/v1/bug.html#get-bug
+        // 100 (Invalid Bug Alias) If you specified an alias and there is no bug with that alias.
+        // 101 (Invalid Bug ID) The bug_id you specified doesn't exist in the database.
+        // 102 (Access Denied) You do not have access to the bug_id you specified.
+        $accepted_status_codes = array(100, 101, 102, 200);
+        $future = id(new HTTPSFuture((string) $future_uri))
+          ->setMethod('GET')
+          ->addHeader('X-Bugzilla-API-Key', PhabricatorEnv::getEnvConfig('bugzilla.automation_api_key'))
+          ->addHeader('Accept', 'application/json')
+          ->setExpectStatus($accepted_status_codes)
+          ->setTimeout(5);
+
+        // Resolve the async HTTPSFuture request and extract JSON body
+        try {
+          // https://github.com/phacility/libphutil/blob/master/src/future/http/BaseHTTPFuture.php#L339
+          list($status) = $future->parseRawHTTPResponse();
+          $status_code = $status->getStatusCode();
+
+          if($status_code === 100 || $status_code === 101) {
+            $errors[] = new PhabricatorApplicationTransactionValidationError(
+              $type,
+              pht(''),
+              pht('Bugzilla Bug ID does not exist.')
+            );
+          }
+          else if($status_code === 102) {
+            $errors[] = new PhabricatorApplicationTransactionValidationError(
+              $type,
+              pht(''),
+              pht('Bugzilla Bug ID: you do not have permission for this bug.')
+            );
+          }
+          else if($status_code !== in_array($status_code, $accepted_status_codes)) {
+            $errors[] = new PhabricatorApplicationTransactionValidationError(
+              $type,
+              pht(''),
+              pht('Bugzilla Bug ID:  Bugzilla did not provide an expected response: %s.', $status_code)
+            );
+          }
+        } catch (HTTPFutureResponseStatus $ex) {
+          $errors[] = new PhabricatorApplicationTransactionValidationError(
+            $type,
+            pht(''),
+            pht('Bugzilla could not be reached.')
+          );
+        }
+      }
+    }
+
+    return $errors;
+  }
+
 /* -(  Property View  )------------------------------------------------------ */
 
   public function shouldAppearInPropertyView() {
@@ -82,11 +184,10 @@ final class DifferentialBugzillaBugIDField
   }
 
   public function renderPropertyViewValue(array $handles) {
-    // TODO Link to the right Bugzilla server (defined in docker)
-    return phutil_tag(
-      'a', array('href' => 'https://bugzilla/'.$this->getValue()),
-      $this->getValue()
-    );
+    $bug_uri = (string) id(new PhutilURI(PhabricatorEnv::getEnvConfig('bugzilla.url')))
+      ->setPath($this->getValue());
+
+    return phutil_tag('a', $bug_uri, $this->getValue());
   }
 
 /* -(  List View  )---------------------------------------------------------- */
