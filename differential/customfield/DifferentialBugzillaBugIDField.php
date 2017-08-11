@@ -9,9 +9,6 @@
 final class DifferentialBugzillaBugIDField
   extends DifferentialStoredCustomField {
 
-  // Used in application transaction validation
-  private $error;
-
 /* -(  Core Properties and Field Identity  )--------------------------------- */
 
   public function getFieldKey() {
@@ -64,21 +61,17 @@ final class DifferentialBugzillaBugIDField
   }
 
   public function renderEditControl(array $handles) {
-    // TODO add validation
     return id(new AphrontFormTextControl())
       ->setLabel($this->getFieldName())
       ->setCaption(
         pht('Example: %s', phutil_tag('tt', array(), '2345')))
       ->setName($this->getFieldKey())
-      ->setValue($this->getValue(), '')
-      ->setError($this->error);
+      ->setValue($this->getValue(), '');
   }
 
   public function validateApplicationTransactions(
     PhabricatorApplicationTransactionEditor $editor,
     $type, array $xactions) {
-
-    $this->error = null;
 
     $errors = parent::validateApplicationTransactions($editor, $type, $xactions);
 
@@ -128,7 +121,7 @@ final class DifferentialBugzillaBugIDField
         // 100 (Invalid Bug Alias) If you specified an alias and there is no bug with that alias.
         // 101 (Invalid Bug ID) The bug_id you specified doesn't exist in the database.
         // 102 (Access Denied) You do not have access to the bug_id you specified.
-        $accepted_status_codes = array(100, 101, 102, 200);
+        $accepted_status_codes = array(100, 101, 102, 200, 404);
         $future = id(new HTTPSFuture((string) $future_uri))
           ->setMethod('GET')
           ->addHeader('X-Bugzilla-API-Key', PhabricatorEnv::getEnvConfig('bugzilla.automation_api_key'))
@@ -142,7 +135,7 @@ final class DifferentialBugzillaBugIDField
           list($status) = $future->parseRawHTTPResponse();
           $status_code = $status->getStatusCode();
 
-          if($status_code === 100 || $status_code === 101) {
+          if(in_array($status_code, array(100, 101, 404))) {
             $errors[] = new PhabricatorApplicationTransactionValidationError(
               $type,
               pht(''),
