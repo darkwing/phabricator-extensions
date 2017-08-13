@@ -27,14 +27,6 @@ final class PhabricatorBMOAuthAdapter extends PhutilAuthAdapter {
     $this->type = $type;
   }
 
-  public function getAdapterDomain() {
-    return $this->domain;
-  }
-
-  public function setAdapterDomain($domain) {
-    $this->domain = $domain;
-  }
-
   public function getAccountEmail() {
     return $this->account_email;
   }
